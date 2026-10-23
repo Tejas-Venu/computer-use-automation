@@ -1,0 +1,39 @@
+services:
+  automation:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    working_dir: /workspace
+
+    volumes:
+      - .:/workspace
+
+    environment:
+      OLLAMA_HOST: http://host.docker.internal:11434
+      OLLAMA_MODEL: qwen3-vl:4b
+      TARGET_URL: http://mock-bank:8000
+      PYTHONUNBUFFERED: "1"
+
+    depends_on:
+      - mock-bank
+
+    command: python -m app.main
+
+  mock-bank:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    working_dir: /workspace
+
+    volumes:
+      - .:/workspace
+
+    ports:
+      - "127.0.0.1:8000:8000"
+
+    command: >
+      uvicorn mock_bank.main:app
+      --host 0.0.0.0
+      --port 8000

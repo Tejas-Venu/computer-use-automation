@@ -1,0 +1,123 @@
+{
+  "schema_version": "1.0",
+  "capability_id": "banking.get_savings_balance",
+  "capability_version": "1.0.0",
+  "description": "Look up a member and retrieve their current savings balance",
+  "target_app": "mock-bank",
+  "inputs": {
+    "member_id": {
+      "type": "string",
+      "required": true,
+      "description": "Member identifier"
+    }
+  },
+  "outputs": {
+    "member_id": {
+      "type": "string",
+      "description": "Verified member identifier",
+      "source_step": null
+    },
+    "savings_balance": {
+      "type": "string",
+      "description": "Savings balance in USD",
+      "source_step": "extract_balance"
+    },
+    "currency": {
+      "type": "string",
+      "description": "Currency code",
+      "source_step": null
+    }
+  },
+  "steps": [
+    {
+      "step_id": "enter_member_id",
+      "action": "fill",
+      "target": {
+        "strategy": "attribute",
+        "tag": "input",
+        "attribute": "name",
+        "value": "member_id",
+        "role": null,
+        "name": null,
+        "selector": null
+      },
+      "value": "{{member_id}}",
+      "extraction": null,
+      "checkpoint": {
+        "type": "input_value",
+        "expected": "{{member_id}}",
+        "target": {
+          "strategy": "attribute",
+          "tag": "input",
+          "attribute": "name",
+          "value": "member_id",
+          "role": null,
+          "name": null,
+          "selector": null
+        }
+      }
+    },
+    {
+      "step_id": "submit_search",
+      "action": "click",
+      "target": {
+        "strategy": "role",
+        "tag": null,
+        "attribute": null,
+        "value": null,
+        "role": "button",
+        "name": "Search",
+        "selector": null
+      },
+      "value": null,
+      "extraction": null,
+      "checkpoint": {
+        "type": "url_path",
+        "expected": "/search",
+        "target": null
+      }
+    },
+    {
+      "step_id": "open_details",
+      "action": "click",
+      "target": {
+        "strategy": "role",
+        "tag": null,
+        "attribute": null,
+        "value": null,
+        "role": "link",
+        "name": "Open Details",
+        "selector": null
+      },
+      "value": null,
+      "extraction": null,
+      "checkpoint": {
+        "type": "text_visible",
+        "expected": "Member Details",
+        "target": null
+      }
+    },
+    {
+      "step_id": "extract_balance",
+      "action": "extract",
+      "target": null,
+      "value": null,
+      "extraction": {
+        "source": "visible_text",
+        "pattern": "Savings Balance:\\s*\\$([\\d,]+(?:\\.\\d{2})?)",
+        "group": 1
+      },
+      "checkpoint": null
+    }
+  ],
+  "success_condition": {
+    "type": "member_balance_verified",
+    "member_id_parameter": "member_id"
+  },
+  "expected_outcomes": {
+    "member_not_found": {
+      "type": "business_outcome",
+      "message": "Member not found"
+    }
+  }
+}

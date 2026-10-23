@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Local execution data
+evidence/private/
+artifacts/local/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
