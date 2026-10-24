@@ -16,7 +16,11 @@ class BrowserSurface:
             headless=True
         )
 
-        self.page = await self.browser.new_page()
+        self.context = await self.browser.new_context(
+            service_workers="block"
+        )
+
+        self.page = await self.context.new_page()
 
     async def navigate(self, url: str):
         await self.page.goto(url, wait_until="domcontentloaded")

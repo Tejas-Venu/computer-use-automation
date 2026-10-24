@@ -6,8 +6,10 @@ from pathlib import Path
 from urllib.parse import urlparse
 from app.discovery.completion import verify_savings_balance
 from app.discovery.agent import DiscoveryAgent
+from app.safety import policy
 from app.surface.browser import BrowserSurface
-
+from app.safety.policy import SafetyPolicy
+from app.safety.guard import ActionGuard
 
 ALLOWED_HOST = "mock-bank"
 ALLOWED_ACTIONS = {"fill", "click", "extract", "finish", "blocked"}
@@ -27,6 +29,8 @@ async def run_discovery(goal: str, member_id: str, max_steps: int = 10,):
     if not 1 <= len(member_id) <= 20:
         raise ValueError("member_id must be 1-20 digits")
     surface = BrowserSurface()
+    policy = SafetyPolicy()
+    guard = ActionGuard(policy)
     agent = DiscoveryAgent()
     history = []
     extracted_data = []
@@ -88,6 +92,16 @@ async def run_discovery(goal: str, member_id: str, max_steps: int = 10,):
                 if control["tag"] not in ("input", "textarea"):
                     raise PermissionError("Not an input control")
 
+                locator = surface.page.locator(
+                    "input, button, a, select, textarea"
+                ).nth(action.control_id)
+
+                await guard.validate(
+                    page=surface.page,
+                    locator=locator,
+                    action="fill",
+                )
+
                 await surface.fill_control(
                     action.control_id,
                     action.value,
@@ -100,6 +114,16 @@ async def run_discovery(goal: str, member_id: str, max_steps: int = 10,):
 
                 if control["tag"] not in ("button", "a"):
                     raise PermissionError("Not a clickable control")
+
+                locator = surface.page.locator(
+                    "input, button, a, select, textarea"
+                ).nth(action.control_id)
+
+                await guard.validate(
+                    page=surface.page,
+                    locator=locator,
+                    action="click",
+                )
 
                 await surface.click_control(action.control_id)
                 check_url(surface.page.url)

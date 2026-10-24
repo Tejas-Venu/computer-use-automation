@@ -1,12 +1,16 @@
 
 import asyncio
+from email import policy
 import json
 import re
 import sys
+from app.safety.policy import PolicyViolation
 from pathlib import Path
-
+from app.safety.navigation import install_navigation_guard
 from app.artifacts.schema import CapabilityArtifact
 from app.discovery.completion import verify_savings_balance
+from app.replay.checkpoints import verify_checkpoint
+from app.replay.evidence import ReplayEvidence
 from app.replay.locators import resolve_locator
 from app.replay.outcomes import detect_business_outcome
 from app.replay.waits import (
@@ -15,7 +19,8 @@ from app.replay.waits import (
     wait_for_control,
 )
 from app.surface.browser import BrowserSurface
-from app.replay.checkpoints import verify_checkpoint
+from app.safety.policy import SafetyPolicy
+from app.safety.guard import ActionGuard
 
 
 ARTIFACT_PATH = (
@@ -27,9 +32,11 @@ TARGET_URL = "http://mock-bank:8000"
 
 def load_artifact(path: str) -> CapabilityArtifact:
     """
-    Load and validate a saved capability artifact.
+    Load and validate the saved capability artifact.
     """
-    data = json.loads(Path(path).read_text())
+    data = json.loads(
+        Path(path).read_text(encoding="utf-8")
+    )
 
     return CapabilityArtifact.model_validate(data)
 
@@ -37,7 +44,7 @@ def load_artifact(path: str) -> CapabilityArtifact:
 def resolve_value(template: str, inputs: dict) -> str:
     """
     Replace a parameter placeholder with its
-    corresponding runtime input value.
+    corresponding runtime input.
     """
     match = re.fullmatch(
         r"\{\{(\w+)\}\}",
@@ -59,12 +66,15 @@ def resolve_value(template: str, inputs: dict) -> str:
     return str(inputs[parameter])
 
 
-async def run_replay(member_id: str) -> dict:
+async def run_replay(
+    member_id: str,
+    artifact_path: str = ARTIFACT_PATH,
+) -> dict:
     """
-    Execute the saved banking capability without
+    Execute a saved banking capability without
     invoking an LLM.
 
-    Possible results:
+    Results:
     - success
     - business_outcome
     - failure
@@ -75,12 +85,10 @@ async def run_replay(member_id: str) -> dict:
             "Invalid member ID. Expected 1-20 digits."
         )
 
-    artifact = load_artifact(ARTIFACT_PATH)
+    artifact = load_artifact(artifact_path)
 
     if artifact.capability_id != "banking.get_savings_balance":
-        raise ValueError(
-            "Unexpected capability ID"
-        )
+        raise ValueError("Unexpected capability ID")
 
     inputs = {
         "member_id": member_id,
@@ -88,9 +96,96 @@ async def run_replay(member_id: str) -> dict:
 
     surface = BrowserSurface()
     current_step = None
+    policy = SafetyPolicy()
+    guard = ActionGuard(policy)
+    # Create a unique evidence recorder for this run.
+    evidence = ReplayEvidence()
+
+    evidence.record(
+        event_type="replay_started",
+        details={
+            "capability_id": artifact.capability_id,
+            "capability_version": artifact.capability_version,
+        },
+    )
+
+    def complete_business_outcome(outcome: str) -> dict:
+        """
+        Save and return a known business outcome.
+        """
+        result = {
+            "status": "business_outcome",
+            "capability_id": artifact.capability_id,
+            "outcome": outcome,
+            "outputs": {},
+        }
+
+        evidence.record(
+            event_type="business_outcome",
+            step=current_step,
+            details={"outcome": outcome},
+        )
+
+        evidence.save(result)
+
+        return result
+
+    async def complete_failure(
+        error_type: str,
+        recoverable: bool,
+    ) -> dict:
+        """
+        Save sanitized failure evidence and
+        capture a mock-app screenshot.
+        """
+        result = {
+            "status": "failure",
+            "capability_id": artifact.capability_id,
+            "step": current_step,
+            "error": {
+                "type": error_type,
+                "message": "Replay execution failed",
+                "recoverable": recoverable,
+            },
+        }
+
+        evidence.record(
+            event_type="step_failed",
+            step=current_step,
+            details={
+                "error_type": error_type,
+                "recoverable": recoverable,
+            },
+        )
+
+        if surface.page is not None:
+            try:
+                await evidence.capture_failure(
+                    surface.page
+                )
+
+                evidence.record(
+                    event_type="failure_screenshot_saved",
+                    step=current_step,
+                )
+
+            except Exception:
+                evidence.record(
+                    event_type="screenshot_unavailable",
+                    step=current_step,
+                )
+
+        evidence.save(result)
+
+        return result
 
     try:
         await surface.start()
+        policy.validate_url(TARGET_URL)
+        await install_navigation_guard(
+            context=surface.context,
+            policy=policy,
+        )
         await surface.navigate(TARGET_URL)
 
         for step in artifact.steps:
@@ -98,7 +193,15 @@ async def run_replay(member_id: str) -> dict:
 
             print(f"Executing: {current_step}")
 
-            # Inspect the current application state.
+            evidence.record(
+                event_type="step_started",
+                step=current_step,
+                details={
+                    "action": step.action,
+                },
+            )
+
+            # Inspect the current UI state.
             observation = await surface.observe()
 
             # Detect expected business outcomes before
@@ -109,12 +212,7 @@ async def run_replay(member_id: str) -> dict:
             )
 
             if outcome is not None:
-                return {
-                    "status": "business_outcome",
-                    "capability_id": artifact.capability_id,
-                    "outcome": outcome,
-                    "outputs": {},
-                }
+                return complete_business_outcome(outcome)
 
             # Execute interactive actions.
             if step.action in ("fill", "click"):
@@ -130,13 +228,18 @@ async def run_replay(member_id: str) -> dict:
                 )
 
                 # Wait for exactly one visible control.
-                # Known business outcomes are detected
-                # during the wait.
+                # Detect business outcomes during the wait.
                 await wait_for_control(
                     page=surface.page,
                     locator=locator,
                     artifact=artifact,
                     timeout=5.0,
+                )
+
+                await guard.validate(
+                    page=surface.page,
+                    locator=locator,
+                    action=step.action,
                 )
 
                 if step.action == "fill":
@@ -162,6 +265,7 @@ async def run_replay(member_id: str) -> dict:
                         timeout=5000,
                     )
 
+                # Verify the checkpoint after execution.
                 if step.checkpoint is not None:
                     await verify_checkpoint(
                         page=surface.page,
@@ -170,8 +274,26 @@ async def run_replay(member_id: str) -> dict:
                         timeout_ms=5000,
                     )
 
+                evidence.record(
+                    event_type="step_completed",
+                    step=current_step,
+                    details={
+                        "action": step.action,
+                        "checkpoint": (
+                            "passed"
+                            if step.checkpoint is not None
+                            else "not_configured"
+                        ),
+                    },
+                )
+
             # Extract and verify requested information.
             elif step.action == "extract":
+
+                if step.extraction is None:
+                    raise ValueError(
+                        "Missing extraction specification"
+                    )
 
                 page_text = await surface.page.locator(
                     "body"
@@ -183,20 +305,9 @@ async def run_replay(member_id: str) -> dict:
                 )
 
                 if outcome is not None:
-                    return {
-                        "status": "business_outcome",
-                        "capability_id": artifact.capability_id,
-                        "outcome": outcome,
-                        "outputs": {},
-                    }
+                    return complete_business_outcome(outcome)
 
-                if step.extraction is None:
-                    raise ValueError(
-                        "Missing extraction specification"
-                    )
-
-                # Apply the extraction rule stored
-                # in the capability artifact.
+                # Apply the extraction rule from the artifact.
                 match = re.search(
                     step.extraction.pattern,
                     page_text,
@@ -212,8 +323,8 @@ async def run_replay(member_id: str) -> dict:
                     .replace(",", "")
                 )
 
-                # Independently verify that the
-                # balance belongs to the requested member.
+                # Verify the balance belongs to the
+                # requested member.
                 outputs = verify_savings_balance(
                     page_text=page_text,
                     member_id=member_id,
@@ -224,16 +335,40 @@ async def run_replay(member_id: str) -> dict:
                         "Member ID or balance verification failed"
                     )
 
-                if outputs["savings_balance"] != extracted_balance:
+                if (
+                    outputs["savings_balance"]
+                    != extracted_balance
+                ):
                     raise RuntimeError(
                         "Extracted balance verification mismatch"
                     )
 
-                return {
+                evidence.record(
+                    event_type="step_completed",
+                    step=current_step,
+                    details={
+                        "action": "extract",
+                        "checkpoint": "passed",
+                    },
+                )
+
+                result = {
                     "status": "success",
                     "capability_id": artifact.capability_id,
                     "outputs": outputs,
                 }
+
+                evidence.record(
+                    event_type="replay_completed",
+                    step=current_step,
+                    details={
+                        "status": "success",
+                    },
+                )
+
+                evidence.save(result)
+
+                return result
 
             else:
                 raise ValueError(
@@ -245,44 +380,44 @@ async def run_replay(member_id: str) -> dict:
             "the success condition"
         )
 
-    except BusinessOutcomeDetected as exc:
-        return {
-            "status": "business_outcome",
-            "capability_id": artifact.capability_id,
-            "outcome": exc.outcome,
-            "outputs": {},
-        }
+    except PolicyViolation:
+        return await complete_failure(
+            error_type="policy_violation",
+            recoverable=False,
+        )
 
-    except LocatorTimeoutError as exc:
-        return {
-            "status": "failure",
-            "capability_id": artifact.capability_id,
-            "step": current_step,
-            "error": {
-                "type": "locator_timeout",
-                "message": str(exc),
-                "recoverable": True,
-            },
-        }
+    except BusinessOutcomeDetected as exc:
+        return complete_business_outcome(exc.outcome)
+
+    except LocatorTimeoutError:
+        return await complete_failure(
+            error_type="locator_timeout",
+            recoverable=True,
+        )
 
     except Exception as exc:
-        return {
-            "status": "failure",
-            "capability_id": artifact.capability_id,
-            "step": current_step,
-            "error": {
-                "type": type(exc).__name__,
-                "message": str(exc),
-                "recoverable": False,
-            },
-        }
+        blocked_requests = getattr(
+            surface.context,
+            "_blocked_requests",
+            [],
+        ) if getattr(surface, "context", None) else []
+
+        if blocked_requests:
+            return await complete_failure(
+                error_type="policy_violation",
+                recoverable=False,
+            )
+
+        return await complete_failure(
+            error_type=type(exc).__name__,
+            recoverable=False,
+        )
 
     finally:
         await surface.close()
 
 
 if __name__ == "__main__":
-
     member_id = (
         sys.argv[1]
         if len(sys.argv) > 1
