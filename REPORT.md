@@ -1,220 +1,292 @@
 
-# Technical Report: Computer-Use Automation System
+# Computer-Use Automation System
+### Design Report — interface.ai Engineering Assignment
 
-## 1. Executive Summary
+## 1. Architecture
 
-This project implements a computer-use automation prototype that transforms LLM-guided browser discovery into reusable, deterministic automation capabilities.
+The system separates LLM-driven workflow discovery from deterministic execution. An LLM discovers how to complete a task through a live application interface, the successful execution is recorded as a versioned capability artifact, and subsequent executions replay that capability without requiring the model.
 
-The system demonstrates the workflow using a fictional banking administration portal.
+### System Components
 
-Its primary capability, `banking.get_savings_balance`, retrieves a member's savings balance from the application's user interface.
+- **Browser Surface (`app/surface/`)** — Playwright-based browser observation, navigation, and interaction.
+- **Discovery Agent (`app/discovery/`)** — Ollama-hosted Qwen model operating through an observe → decide → act loop.
+- **Artifact System (`app/artifacts/`)** — Pydantic schemas and generation of typed, reusable JSON capabilities.
+- **Replay Engine (`app/replay/`)** — Deterministic execution, locator resolution, checkpoints, extraction, and error handling.
+- **Safety Layer (`app/safety/`)** — Action restrictions, navigation guards, and sensitive-data protection.
+- **Human Handoff (`app/handoff/`)** — Browser ownership, intervention lifecycle, FastAPI operator API, and dashboard.
 
-The implementation combines LLM-assisted discovery, versioned capability artifacts, deterministic Playwright replay, safety controls, evidence recording, and human-in-the-loop intervention.
+### Execution Flow
 
-The latest regression suite completed with 52 passing tests.
+```text
+Natural-Language Goal
+        |
+        v
+LLM Discovery Agent
+        |
+        v
+Live Browser Interaction
+        |
+        v
+Successful Discovery Evidence
+        |
+        v
+Capability Artifact Generator
+        |
+        v
+Versioned JSON Capability
+        |
+        v
+Deterministic Replay Engine
+        |
+        v
+Success / Business Outcome / Failure
+        |
+        +----> Human Intervention (when required)
+```
 
-## 2. Problem Statement
+**Key decision:** Use the LLM during discovery, not during production replay. This reduces inference costs and nondeterministic behavior while allowing successful workflows to be reused.
 
-Traditional browser automation frequently depends on manually written selectors and fixed execution scripts.
+**Trade-off:** Playwright provides reliable browser interaction and accessibility-based targeting, but the implemented surface does not yet support native desktop applications or interfaces without usable DOM/accessibility information.
 
-LLM-based browser agents offer flexibility but can introduce nondeterministic behavior, additional inference costs, and difficulties with reproducibility.
+The system uses Docker Compose and a local mock banking application. Distributed orchestration was intentionally excluded to keep the implementation focused on the core workflow.
 
-This project separates workflow discovery from execution.
+## 2. Artifact schema
 
-The LLM discovers a successful workflow once. The system records its actions and UI evidence, generates a versioned capability, and subsequently executes that capability without additional LLM calls.
+A capability is represented as a typed, versioned JSON document validated using Pydantic.
 
-Human intervention provides a controlled recovery mechanism when automation requires operator assistance.
+The demonstrated capability is:
 
-## 3. System Architecture
+- **Capability ID:** `banking.get_savings_balance`
+- **Version:** `1.0.0`
+- **Input:** `member_id` (string)
+- **Outputs:** `member_id`, `savings_balance`, and `currency`
 
-The implementation contains six primary subsystems.
+The artifact contains:
 
-### 3.1 Browser Surface
+1. Capability identity, version, description, and target application.
+2. Typed input and output specifications.
+3. Ordered execution steps.
+4. Stable locator specifications.
+5. Runtime parameter references.
+6. Checkpoints and extraction rules.
+7. Success conditions and expected business outcomes.
 
-The browser surface uses Playwright to navigate the application, inspect controls, interact with elements, and capture screenshots.
+### Parameterization
 
-Implementation:
-
-`app/surface/browser.py`
-
-### 3.2 LLM Discovery
-
-The discovery agent observes the browser and requests structured action decisions from an Ollama-hosted Qwen model.
-
-Supported discovery actions include filling inputs, clicking controls, extracting information, and terminating execution.
-
-The discovery runner records action history and stable locator information.
-
-Implementation:
-
-- `app/discovery/agent.py`
-- `app/discovery/runner.py`
-- `app/discovery/schemas.py`
-- `app/discovery/completion.py`
-
-### 3.3 Capability Artifact System
-
-Successful discovery evidence is converted into a versioned JSON capability.
-
-The artifact describes inputs, outputs, actions, locators, checkpoints, extraction rules, and expected outcomes.
-
-Implementation:
-
-- `app/artifacts/schema.py`
-- `app/artifacts/generator.py`
-
-### 3.4 Deterministic Replay
-
-The replay engine loads the saved capability and executes browser actions without invoking the LLM.
-
-The engine uses parameter substitution, stable locators, UI checkpoints, structured extraction, and business-outcome verification.
-
-Implementation:
-
-- `app/replay/engine.py`
-- `app/replay/locators.py`
-- `app/replay/checkpoints.py`
-- `app/replay/outcomes.py`
-- `app/replay/waits.py`
-
-### 3.5 Safety and Evidence
-
-The safety subsystem restricts navigation and browser actions to the approved mock application.
-
-The evidence subsystem records execution events and supports failure diagnostics.
-
-Implementation:
-
-- `app/safety/policy.py`
-- `app/safety/guard.py`
-- `app/safety/navigation.py`
-- `app/replay/evidence.py`
-
-### 3.6 Human Intervention
-
-The handoff subsystem manages browser ownership and intervention requests.
-
-The same Playwright page is preserved while control transfers from automation to a human operator.
-
-Implementation:
-
-- `app/handoff/session.py`
-- `app/handoff/intervention.py`
-- `app/handoff/controller.py`
-- `app/handoff/service.py`
-- `app/handoff/api.py`
-
-The frontend is implemented using HTML, CSS, and JavaScript.
-
-## 4. Capability Demonstration
-
-Capability ID:
-
-`banking.get_savings_balance`
-
-Version:
-
-`1.0.0`
-
-Input:
+The member identifier is stored as:
 
 ```json
 {
-  "member_id": "12345"
+  "value": "{{member_id}}"
 }
 ```
 
-The workflow consists of four actions:
+At runtime, the replay engine substitutes the supplied input without changing the artifact.
 
-1. Enter the member ID.
-2. Submit the search.
-3. Open member details.
-4. Extract and verify the savings balance.
+### Locator Design
 
-Expected output:
+Supported locator strategies include:
 
-```json
-{
-  "member_id": "12345",
-  "savings_balance": "2450.75",
-  "currency": "USD"
-}
-```
+- Attribute-based targeting
+- Accessibility role and name
+- Visible text
+- CSS selectors
 
-The member ID is parameterized, allowing the same capability to execute for different members.
+For the demonstrated workflow, named attributes and accessibility roles are preferred over positional control IDs.
 
-## 5. Discovery and Artifact Generation
+**Trade-off:** Stable locators improve replay reliability but remain dependent on the application's UI contract. Locator uniqueness and checkpoint verification help detect unexpected changes.
 
-The initial discovery successfully identified the required browser interactions and retrieved the savings balance.
+The artifact is independent of the raw LLM transcript, making it reviewable and reusable by a calling agent.
 
-The discovery runner recorded the sequence and associated UI locators.
+## 3. Determinism & error handling
 
-The artifact generator validated the discovery sequence and converted the recorded controls into stable locator specifications.
+The replay engine loads a saved capability artifact and executes its steps without invoking the LLM.
 
-This avoids relying on positional control IDs during replay.
+For each action, replay:
 
-The artifact also includes extraction and verification rules for the savings balance.
-
-## 6. Deterministic Replay
-
-Replay executes the saved artifact without invoking Ollama.
-
-For each step, the engine:
-
-1. Checks the current application state.
+1. Validates the current application state.
 2. Detects known business outcomes.
 3. Resolves the saved locator.
-4. Verifies locator uniqueness and availability.
-5. Executes the approved action.
-6. Validates the configured checkpoint.
-7. Records execution evidence.
+4. Waits for the expected control.
+5. Verifies locator uniqueness.
+6. Executes the permitted action.
+7. Checks the expected post-action state.
+8. Records execution evidence.
 
-At extraction, the engine verifies that the returned balance belongs to the requested member.
+Extracted data is independently verified against the requested member identifier.
 
-### Verified replay results
+### Result Taxonomy
 
-| Member ID | Outcome | Balance |
-|---|---|---|
-| 12345 | Success | USD 2450.75 |
-| 67890 | Success | USD 8150.20 |
+**Success**
+
+The capability completes and returns verified outputs.
+
+```json
+{
+  "status": "success",
+  "capability_id": "banking.get_savings_balance",
+  "outputs": {
+    "member_id": "12345",
+    "savings_balance": "2450.75",
+    "currency": "USD"
+  }
+}
+```
+
+**Expected business outcome**
+
+An unknown member returns a structured result rather than an exception.
+
+```json
+{
+  "status": "business_outcome",
+  "capability_id": "banking.get_savings_balance",
+  "outcome": "member_not_found",
+  "outputs": {}
+}
+```
+
+**Technical failure**
+
+Failures identify the interrupted step, error category, and whether recovery may be possible.
+
+Examples include:
+
+- Locator timeout
+- Checkpoint failure
+- Policy violation
+- Session ownership failure
+- Intervention timeout
+- Extraction verification failure
+
+### Recovery Strategy
+
+The system uses bounded waits and explicit escalation rather than blindly retrying arbitrary actions.
+
+Known business outcomes are returned directly. Recoverable UI problems may trigger human intervention. Hard failures terminate execution and preserve diagnostic evidence.
+
+### Verified Results
+
+| Member ID | Result | Savings Balance |
+|-----------|--------|-----------------|
+| 12345 | Success | $2,450.75 |
+| 67890 | Success | $8,150.20 |
 | 99999 | Member not found | N/A |
 
-These cases demonstrate successful parameterized execution and structured handling of a missing member.
+The latest verified regression suite completed with **52 passing tests**.
 
-## 7. Human-in-the-Loop Design
+## 4. Heterogeneity & multi-tenant
 
-Human intervention is implemented using a shared browser session.
+The current implementation uses Playwright, but the intended architecture separates capability definitions from application-specific observation and interaction.
 
-The session state machine includes:
+### Heterogeneous Surfaces
 
-- Running
-- Paused
-- Human control
-- Resuming
-- Completed
-- Failed
+The browser surface could be extended through interchangeable adapters:
 
-When intervention is requested, automation pauses and releases browser ownership.
+| Surface | Observation | Interaction |
+|---------|-------------|-------------|
+| Modern web | DOM and accessibility tree | Playwright |
+| Legacy web | Frames, accessibility tree, screenshots | Frame-aware and visual controls |
+| Desktop | OS accessibility APIs and screenshots | OS-level input automation |
 
-An authorized operator can acquire control, perform an approved action, and release control.
+Each adapter would expose a common interface for observation, action execution, and screenshot capture.
 
-Automation then revalidates the browser state before continuing.
+The replay engine would continue consuming capability artifacts, while the surface adapter would resolve how recorded actions are performed.
 
-The demo workflow pauses before submitting the member search.
+This extension is a design proposal; only the browser implementation exists in the prototype.
 
-The operator can complete Search using the dashboard's manual browser controls.
+### Multi-Tenant Reuse
 
-After resumption, the replay engine checks whether the Search checkpoint has already been satisfied.
+In production, hundreds of financial institutions may operate different configurations of the same vendor application.
 
-This prevents an unnecessary duplicate Search click when the operator has completed that step.
+Instead of recording a separate capability for every institution, artifacts could be organized around shared vendor/application families.
 
-## 8. Human Intervention Evidence
+A proposed capability registry would store:
 
-A successful operator-assisted replay was recorded with run ID:
+- Vendor and application family
+- Supported application versions
+- Base capability version
+- Tenant-specific configuration
+- Locator and route overrides
+- Compatibility and approval status
+
+A base capability would describe the logical workflow. Tenant-specific bindings would resolve differences in branding, routes, labels, and configuration.
+
+### Drift Detection
+
+Compatibility could be checked through:
+
+- Checkpoint failures
+- Changed UI signatures
+- Locator-resolution failures
+- Periodic replay validation
+- Application-version metadata
+
+A failed compatibility check would prevent unattended execution until the affected variant is reviewed.
+
+**Trade-off:** The prototype does not implement multi-tenant infrastructure or desktop adapters. These are documented extension points rather than partially implemented production features.
+
+## 5. Escalation & handoff
+
+The system supports human intervention when automation cannot safely proceed or when a controlled demonstration explicitly requires manual assistance.
+
+### Session Ownership Model
+
+The browser session has six states:
+
+```text
+RUNNING
+   |
+   v
+PAUSED
+   |
+   v
+HUMAN_CONTROL
+   |
+   v
+RESUMING
+   |
+   v
+RUNNING
+   |
+   +----> COMPLETED
+
+Any nonterminal state
+   |
+   +----> FAILED
+```
+
+A `BrowserSession` tracks the active Playwright page, current owner, execution step, and intervention reason.
+
+An `InterventionManager` creates and manages requests for operator assistance.
+
+### Human Intervention Workflow
+
+1. Automation encounters a condition requiring intervention.
+2. The session transitions to `paused`.
+3. An intervention request records the interrupted capability, step, and reason.
+4. An authorized operator acquires control.
+5. The operator performs approved actions on the same Playwright page.
+6. The operator releases control.
+7. Automation resumes and verifies the current application state.
+
+The same browser session is preserved throughout the handoff.
+
+### Post-Intervention Reconciliation
+
+After the operator releases control, replay checks whether the interrupted step's expected checkpoint is already satisfied.
+
+If Search was completed by the operator, automation avoids submitting Search a second time.
+
+If the required state is not reached, the system returns an explicit failure instead of assuming success.
+
+### Verified Handoff Evidence
+
+A successful operator-assisted replay was recorded under:
 
 `3f58aed51c5f4518814772ba2c02b926`
 
-The recorded evidence includes:
+Recorded events include:
 
 ```text
 intervention_requested
@@ -223,141 +295,85 @@ step_completed_by_operator
 replay_completed
 ```
 
-Final status:
+The final replay status was `success`.
 
-`success`
+The implementation provides a functional operator dashboard with screenshot preview, session status, intervention controls, and approved manual actions.
 
-These records demonstrate successful intervention, resumption, checkpoint recognition, and workflow completion.
+A full remote-desktop/co-browsing interface was intentionally excluded.
 
-The replay evidence establishes the operator-completed checkpoint path. A separate manual-action API audit event was not independently verified.
+## 6. Safety
 
-## 9. Safety Model
+The prototype applies explicit restrictions to browser navigation and action execution.
 
-The prototype uses a restrictive safety policy.
+### Application Allowlist
 
-It limits automation to approved mock banking routes and actions.
+Automation is restricted to approved routes within the fictional mock banking application.
 
-The system rejects unauthorized navigation and potentially dangerous operations.
+Navigation to external domains and unapproved routes is blocked.
 
-Additional safeguards include:
+### Action Restrictions
 
-- Browser ownership enforcement
-- Approved action validation
-- Unique locator checks
-- Explicit intervention transitions
-- Failure-state handling
+The safety layer distinguishes permitted read-oriented operations from risky or irreversible actions.
+
+Allowed actions include approved member lookup interactions.
+
+Actions involving transfers, deletion, or other unapproved operations are blocked.
+
+### Session Ownership
+
+Only the active session owner may perform browser actions.
+
+Automation cannot operate while a human owns the session, and an unauthorized operator cannot release another operator's control.
+
+### Sensitive Data Protection
+
+The system includes:
+
+- Operator-token authentication for API requests
+- Environment-based secret configuration
 - Evidence redaction
-- Structured error identifiers
+- Structured failure reporting
+- Restricted browser actions
+- Unique locator validation
 
-The design is intended for a controlled demonstration environment.
+The mock banking application uses fictional data and does not connect to real financial systems.
 
-## 10. Testing and Evaluation
+**Limitation:** This is not a production banking security implementation. Production deployment would require stronger authentication, authorization, audit logging, persistent secret management, and regulated-data handling controls.
 
-The latest full regression suite produced:
+## 7. Cuts
 
-```text
-52 passed, 1 warning
-```
+The project prioritizes a complete end-to-end vertical slice over a broad automation platform.
 
-The tests cover:
+### Deliberately Excluded
 
-- Capability schema validation
-- Structured extraction
-- Browser locator resolution
-- Checkpoint verification
-- Business-outcome detection
-- Failure evidence
-- Safety and navigation policies
-- Browser session ownership
-- Intervention lifecycle
-- Live browser handoff
-- Managed replay integration
-- Operator API authentication
+**Native desktop automation:** Only Playwright browser automation is implemented. Desktop accessibility and visual-control adapters remain proposed extensions.
 
-The remaining warning relates to a Starlette/httpx test-client deprecation and did not cause a test failure.
+**Multi-tenant infrastructure:** Shared vendor capabilities, tenant overrides, and compatibility registries are designed but not implemented.
 
-### Evaluation summary
+**Distributed execution:** Sessions are managed in memory within a single operator service rather than through persistent workers and queues.
 
-The tests and replay results support the following conclusions:
+**Full remote co-browsing:** The dashboard uses screenshots and approved action forms instead of unrestricted remote desktop interaction.
 
-- Parameterized deterministic replay works for the tested members.
-- The system handles missing-member outcomes.
-- Safety restrictions reject tested unauthorized actions.
-- Browser handoff preserves the same Playwright page in integration testing.
-- Managed replay can resume after a simulated intervention.
-- An operator-assisted checkpoint path completed successfully.
-- The operator dashboard can initiate and monitor replay.
+**General-purpose recovery:** Recovery is bounded and workflow-specific. The prototype does not attempt arbitrary autonomous recovery.
 
-These results establish functionality for the tested mock application, not general reliability across arbitrary websites.
+**Production-grade security:** The implementation demonstrates allowlists, ownership enforcement, and redaction, but not enterprise identity management or comprehensive operator audit trails.
 
-## 11. Engineering Challenges
+### Next Improvements
 
-### Stable Locators
+With additional time, the highest-priority improvements would be:
 
-Positional control IDs were unsuitable for reusable replay.
+1. Generalized browser and desktop surface adapters.
+2. Shared capability definitions with tenant-specific overrides.
+3. Persistent session and intervention state.
+4. Stronger operator-action auditing.
+5. Broader runtime error classification and safe recovery policies.
 
-The implementation records locator specifications based on UI attributes and accessibility roles.
+### Conclusion
 
-### LLM Output Reliability
+The implementation demonstrates the complete core workflow:
 
-During discovery, the Ollama model occasionally returned empty responses when generation ended at the output-token limit.
+**Natural-language goal → LLM-driven UI discovery → reusable capability artifact → deterministic replay → verified result or human intervention.**
 
-The discovery implementation was adjusted to improve structured response reliability.
+The system successfully performs parameterized savings-balance retrieval, distinguishes expected business outcomes from technical failures, enforces safety restrictions, and supports operator-assisted replay on the same browser session.
 
-### Business Outcomes
-
-An unknown member initially produced a missing-locator failure.
-
-The replay engine was updated to distinguish an expected `member_not_found` outcome from a technical failure.
-
-### Human Handoff
-
-The implementation required coordination between browser actions and ownership transitions.
-
-Shared locking, intervention state management, and post-intervention checkpoint verification were introduced to support safe handoff.
-
-### Session Failure States
-
-A failed intervention could leave the dashboard displaying a nonterminal session state.
-
-Explicit failure handling was introduced to keep the session lifecycle consistent.
-
-## 12. Limitations
-
-The current prototype has several limitations.
-
-First, the application under test is a fictional banking portal with a narrow workflow.
-
-Second, the operator dashboard provides a screenshot preview and approved manual-action forms rather than a full remote desktop.
-
-Third, browser sessions and intervention state are held in memory, so process restarts terminate active sessions.
-
-Fourth, the implementation is intended for a single operator service instance.
-
-Fifth, recovery and checkpoint reconciliation are designed for the demonstrated workflow and are not a general solution for irreversible transactions.
-
-Finally, production deployment would require stronger operator authentication, authorization, audit logging, secret management, and operational monitoring.
-
-## 13. Future Improvements
-
-Potential improvements include:
-
-- Persistent session and intervention metadata
-- Richer operator audit trails
-- More general capability discovery and generation
-- Multiple supported application workflows
-- Improved locator resilience
-- More detailed replay telemetry
-- Stronger operator identity management
-- Production-grade recovery policies
-- Expanded end-to-end testing
-
-## 14. Conclusion
-
-This project demonstrates a practical approach to combining LLM-driven workflow discovery with deterministic browser automation.
-
-The separation between discovery and replay enables reuse of successful workflows without repeated LLM inference.
-
-Versioned capability artifacts, safety checks, evidence recording, and human intervention provide structure around execution.
-
-The implementation successfully demonstrated parameterized savings-balance retrieval, expected business-outcome handling, and operator-assisted replay in the fictional banking environment.
+The central design principle is that the LLM discovers a workflow once, while deterministic replay provides a repeatable execution path for subsequent invocations.
