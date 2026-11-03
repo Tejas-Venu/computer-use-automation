@@ -1,0 +1,67 @@
+{
+  "status": "success",
+  "goal": "Find member 12345, open their details, and read their savings balance.",
+  "steps": [
+    {
+      "step": 1,
+      "url": "http://mock-bank:8000/",
+      "action": {
+        "action": "fill",
+        "control_id": 0,
+        "value": "12345",
+        "reasoning": "Enter member ID 12345 into the search input field."
+      },
+      "locator": {
+        "strategy": "attribute",
+        "tag": "input",
+        "attribute": "name",
+        "value": "member_id"
+      }
+    },
+    {
+      "step": 2,
+      "url": "http://mock-bank:8000/",
+      "action": {
+        "action": "click",
+        "control_id": 1,
+        "value": null,
+        "reasoning": "Member ID entered; click Search button to proceed to member details."
+      },
+      "locator": {
+        "strategy": "role",
+        "role": "button",
+        "name": "Search"
+      }
+    },
+    {
+      "step": 3,
+      "url": "http://mock-bank:8000/search",
+      "action": {
+        "action": "click",
+        "control_id": 0,
+        "value": null,
+        "reasoning": "Click 'Open Details' to access member 12345's account information."
+      },
+      "locator": {
+        "strategy": "role",
+        "role": "link",
+        "name": "Open Details"
+      }
+    },
+    {
+      "step": 4,
+      "url": "http://mock-bank:8000/members/12345",
+      "action": {
+        "action": "extract",
+        "control_id": null,
+        "value": "$2450.75",
+        "reasoning": "Savings balance visible in page content."
+      }
+    }
+  ],
+  "outputs": {
+    "member_id": "12345",
+    "savings_balance": "2450.75",
+    "currency": "USD"
+  }
+}

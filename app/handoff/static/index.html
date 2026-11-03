@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1">
+  <title>Computer-Use Automation</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon">◈</div>
+        <div>
+          <strong>Automation Studio</strong>
+          <small>Operator Console</small>
+        </div>
+      </div>
+
+      <div class="sidebar-label">WORKSPACE</div>
+      <a href="#overview" class="nav active">Overview</a>
+      <a href="#browser" class="nav">Browser Session</a>
+      <a href="#intervention" class="nav">Intervention</a>
+      <a href="#activity-section" class="nav">Activity</a>
+
+      <div class="sidebar-footer">
+        <span class="status-dot"></span>
+        Local Docker Environment
+      </div>
+    </aside>
+
+    <main class="main" id="overview">
+      <header class="topbar">
+        <div>
+          <h1>Computer-Use Automation</h1>
+          <p>Monitor execution and manage human intervention.</p>
+        </div>
+        <span id="stateBadge" class="badge">Idle</span>
+      </header>
+
+      <section class="summary-grid">
+        <div class="metric">
+          <span>Session State</span>
+          <strong id="sessionState">Idle</strong>
+        </div>
+        <div class="metric">
+          <span>Control Owner</span>
+          <strong id="sessionOwner">None</strong>
+        </div>
+        <div class="metric">
+          <span>Current Step</span>
+          <strong id="currentStep">—</strong>
+        </div>
+        <div class="metric">
+          <span>Execution Result</span>
+          <strong id="resultStatus">Not started</strong>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <div>
+            <h2>Automation Configuration</h2>
+            <p>Start a deterministic capability replay.</p>
+          </div>
+        </div>
+
+        <div class="config-grid">
+          <label>
+            Operator Token
+            <input id="token" type="password"
+                   placeholder="Enter access token"
+                   autocomplete="off">
+          </label>
+
+          <label>
+            Operator ID
+            <input id="operatorId" value="operator-1">
+          </label>
+
+          <label>
+            Member ID
+            <input id="memberId" value="12345">
+          </label>
+
+          <label class="demo-toggle">
+            <input
+              id="demoIntervention"
+              type="checkbox"
+            >
+            Require human intervention (demo)
+          </label>
+
+          <button id="startBtn" class="primary">
+            Start Automation
+          </button>
+        </div>
+      </section>
+
+      <section class="workspace-grid" id="browser">
+        <div class="panel browser-panel">
+          <div class="panel-heading">
+            <div>
+              <h2>Live Browser Workspace</h2>
+              <p>The existing Playwright browser session.</p>
+            </div>
+            <span id="browserStatus" class="mini-badge">
+              Disconnected
+            </span>
+          </div>
+
+          <div class="browser-frame">
+            <div class="browser-toolbar">
+              <div class="window-dots">
+                <span></span><span></span><span></span>
+              </div>
+
+              <div class="address-bar">
+                <span>◎</span>
+                <span id="browserUrl">
+                  No active browser session
+                </span>
+              </div>
+
+              <button id="refreshBrowser"
+                      class="icon-button"
+                      title="Refresh preview">
+                ↻
+              </button>
+            </div>
+
+            <div class="browser-viewport">
+              <div id="browserEmpty" class="browser-empty">
+                <div class="empty-icon">▣</div>
+                <h3>No active browser session</h3>
+                <p>
+                  Start automation to see the current
+                  banking application page here.
+                </p>
+              </div>
+
+              <img id="browserImage"
+                   alt="Live Playwright browser preview"
+                   hidden>
+            </div>
+
+            <div class="browser-footer">
+              <span id="previewLabel">
+                Waiting for browser session
+              </span>
+              <span>Read-only visual preview</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="side-column">
+          <section class="panel" id="intervention">
+            <div class="panel-heading">
+              <div>
+                <h2>Human Intervention</h2>
+                <p>Manual control when automation pauses.</p>
+              </div>
+            </div>
+
+            <div class="intervention-box">
+              <strong id="interventionTitle">
+                No intervention required
+              </strong>
+              <p id="interventionText">
+                Automation is operating normally.
+              </p>
+            </div>
+
+            <div class="button-row">
+              <button id="takeBtn" disabled>
+                Take Control
+              </button>
+              <button id="resumeBtn" disabled>
+                Resume Automation
+              </button>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-heading">
+              <div>
+                <h2>Execution Timeline</h2>
+                <p>Current workflow progress.</p>
+              </div>
+            </div>
+
+            <div id="timeline" class="timeline">
+              <div class="timeline-item">
+                <span class="timeline-dot"></span>
+                <div>
+                  <strong>Waiting to start</strong>
+                  <small>No execution is active.</small>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-heading">
+          <div>
+            <h2>Manual Browser Controls</h2>
+            <p>
+              Available only when you own
+              the paused session.
+            </p>
+          </div>
+        </div>
+
+        <div class="manual-grid">
+          <label>
+            Action
+            <select id="actionType">
+              <option value="fill">Fill</option>
+              <option value="click">Click</option>
+            </select>
+          </label>
+
+          <label>
+            Locator Strategy
+            <select id="strategy">
+              <option value="role">Role</option>
+              <option value="attribute">Attribute</option>
+            </select>
+          </label>
+
+          <label>
+            Role
+            <input id="role" value="button">
+          </label>
+
+          <label>
+            Accessible Name
+            <input id="accessibleName" value="Search">
+          </label>
+
+          <label>
+            Tag
+            <input id="tag" value="input">
+          </label>
+
+          <label>
+            Attribute
+            <input id="attribute" value="name">
+          </label>
+
+          <label>
+            Attribute Value
+            <input id="attributeValue" value="member_id">
+          </label>
+
+          <label>
+            Input Value
+            <input id="actionValue" value="12345">
+          </label>
+        </div>
+
+        <button id="executeBtn" class="primary" disabled>
+          Execute Manual Action
+        </button>
+      </section>
+
+      <section class="panel" id="activity-section">
+        <div class="panel-heading">
+          <div>
+            <h2>Execution Activity</h2>
+            <p>Recent operator and automation events.</p>
+          </div>
+        </div>
+
+        <div id="activity" class="activity">
+          <div>System ready.</div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js?v=3"></script>
+</body>
+</html>

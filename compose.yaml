@@ -37,3 +37,23 @@ services:
       uvicorn mock_bank.main:app
       --host 0.0.0.0
       --port 8000
+
+
+  operator:
+    build: .
+    command:
+      - uvicorn
+      - app.handoff.api:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8080"
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      OPERATOR_TOKEN: ${OPERATOR_TOKEN:?Set OPERATOR_TOKEN in .env}
+    volumes:
+      - .:/workspace
+    depends_on:
+      - mock-bank
+    restart: unless-stopped

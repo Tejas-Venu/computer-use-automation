@@ -1,15 +1,21 @@
 
 import asyncio
-from email import policy
 import json
 import re
 import sys
-from app.safety.policy import PolicyViolation
 from pathlib import Path
-from app.safety.navigation import install_navigation_guard
+
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
 from app.artifacts.schema import CapabilityArtifact
 from app.discovery.completion import verify_savings_balance
-from app.replay.checkpoints import verify_checkpoint
+from app.handoff.controller import SharedBrowserController
+from app.handoff.intervention import InterventionManager
+from app.handoff.session import (
+    BrowserSession,
+    SessionOwnershipError,
+)
+from app.replay.checkpoints import CheckpointFailed, verify_checkpoint
 from app.replay.evidence import ReplayEvidence
 from app.replay.locators import resolve_locator
 from app.replay.outcomes import detect_business_outcome
@@ -18,50 +24,31 @@ from app.replay.waits import (
     LocatorTimeoutError,
     wait_for_control,
 )
+from app.safety.navigation import install_navigation_guard
+from app.safety.policy import PolicyViolation, SafetyPolicy
 from app.surface.browser import BrowserSurface
-from app.safety.policy import SafetyPolicy
-from app.safety.guard import ActionGuard
 
 
-ARTIFACT_PATH = (
-    "artifacts/banking.get_savings_balance.v1.json"
-)
-
+ARTIFACT_PATH = "artifacts/banking.get_savings_balance.v1.json"
 TARGET_URL = "http://mock-bank:8000"
+INTERVENTION_TIMEOUT = 120.0
 
 
 def load_artifact(path: str) -> CapabilityArtifact:
-    """
-    Load and validate the saved capability artifact.
-    """
-    data = json.loads(
-        Path(path).read_text(encoding="utf-8")
-    )
-
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
     return CapabilityArtifact.model_validate(data)
 
 
 def resolve_value(template: str, inputs: dict) -> str:
-    """
-    Replace a parameter placeholder with its
-    corresponding runtime input.
-    """
-    match = re.fullmatch(
-        r"\{\{(\w+)\}\}",
-        template,
-    )
+    match = re.fullmatch(r"\{\{(\w+)\}\}", template)
 
     if not match:
-        raise ValueError(
-            "Unsupported parameter template"
-        )
+        raise ValueError("Unsupported parameter template")
 
     parameter = match.group(1)
 
     if parameter not in inputs:
-        raise ValueError(
-            f"Missing parameter: {parameter}"
-        )
+        raise ValueError(f"Missing parameter: {parameter}")
 
     return str(inputs[parameter])
 
@@ -69,50 +56,79 @@ def resolve_value(template: str, inputs: dict) -> str:
 async def run_replay(
     member_id: str,
     artifact_path: str = ARTIFACT_PATH,
+    session: BrowserSession | None = None,
+    intervention_manager: InterventionManager | None = None,
+    intervention_timeout: float = INTERVENTION_TIMEOUT,
+    demo_intervention: bool = False,
 ) -> dict:
     """
-    Execute a saved banking capability without
-    invoking an LLM.
+    Deterministic capability replay.
 
-    Results:
-    - success
-    - business_outcome
-    - failure
+    Standalone:
+        Owns and closes its browser.
+
+    Managed:
+        Uses an existing Playwright page.
+        Supports human intervention.
+
+    Demo:
+        Pauses before Search.
+        Operator clicks Search.
+        Replay verifies the checkpoint and continues.
     """
 
     if not re.fullmatch(r"[0-9]{1,20}", member_id):
-        raise ValueError(
-            "Invalid member ID. Expected 1-20 digits."
-        )
+        raise ValueError("Invalid member ID")
 
     artifact = load_artifact(artifact_path)
 
     if artifact.capability_id != "banking.get_savings_balance":
         raise ValueError("Unexpected capability ID")
 
-    inputs = {
-        "member_id": member_id,
-    }
+    if (session is None) != (intervention_manager is None):
+        raise ValueError(
+            "Managed replay requires session and intervention manager"
+        )
 
-    surface = BrowserSurface()
-    current_step = None
+    managed = session is not None
+
+    if demo_intervention and not managed:
+        raise ValueError(
+            "Demo intervention requires managed replay"
+        )
+
+    if managed:
+        if intervention_manager.session is not session:
+            raise ValueError("Intervention manager mismatch")
+
+        session.assert_automation_control()
+
+        surface = None
+        page = session.page
+        context = page.context
+    else:
+        surface = BrowserSurface()
+        page = None
+        context = None
+
+    inputs = {"member_id": member_id}
     policy = SafetyPolicy()
-    guard = ActionGuard(policy)
-    # Create a unique evidence recorder for this run.
     evidence = ReplayEvidence()
+
+    current_step = None
+    browser_session = None
 
     evidence.record(
         event_type="replay_started",
         details={
             "capability_id": artifact.capability_id,
             "capability_version": artifact.capability_version,
+            "managed": managed,
+            "demo_intervention": demo_intervention,
         },
     )
 
-    def complete_business_outcome(outcome: str) -> dict:
-        """
-        Save and return a known business outcome.
-        """
+    async def finish_business_outcome(outcome: str) -> dict:
         result = {
             "status": "business_outcome",
             "capability_id": artifact.capability_id,
@@ -128,16 +144,15 @@ async def run_replay(
 
         evidence.save(result)
 
+        if managed:
+            await session.complete()
+
         return result
 
-    async def complete_failure(
+    async def finish_failure(
         error_type: str,
-        recoverable: bool,
+        recoverable: bool = False,
     ) -> dict:
-        """
-        Save sanitized failure evidence and
-        capture a mock-app screenshot.
-        """
         result = {
             "status": "failure",
             "capability_id": artifact.capability_id,
@@ -158,17 +173,14 @@ async def run_replay(
             },
         )
 
-        if surface.page is not None:
+        if page is not None:
             try:
-                await evidence.capture_failure(
-                    surface.page
-                )
+                await evidence.capture_failure(page)
 
                 evidence.record(
                     event_type="failure_screenshot_saved",
                     step=current_step,
                 )
-
             except Exception:
                 evidence.record(
                     event_type="screenshot_unavailable",
@@ -177,244 +189,375 @@ async def run_replay(
 
         evidence.save(result)
 
+        if managed:
+            await session.fail()
+
         return result
 
+    async def request_human_intervention(reason: str) -> None:
+        if not managed:
+            raise RuntimeError(
+                "Human handoff requires managed replay"
+            )
+
+        request = await intervention_manager.create(
+            capability_id=artifact.capability_id,
+            step_id=current_step,
+            reason=reason,
+        )
+
+        evidence.record(
+            event_type="intervention_requested",
+            step=current_step,
+            details={
+                "intervention_id": request.intervention_id,
+                "reason_category": reason,
+            },
+        )
+
+        try:
+            await asyncio.wait_for(
+                session.wait_for_resume(),
+                timeout=intervention_timeout,
+            )
+        except asyncio.TimeoutError:
+            evidence.record(
+                event_type="intervention_timeout",
+                step=current_step,
+            )
+            raise
+
+        await session.resume_automation()
+        policy.validate_url(page.url)
+
+        evidence.record(
+            event_type="automation_resumed",
+            step=current_step,
+        )
+
+    async def checkpoint_passed(step, timeout_ms=1000) -> bool:
+        if step.checkpoint is None:
+            return False
+
+        try:
+            await verify_checkpoint(
+                page=page,
+                checkpoint=step.checkpoint,
+                inputs=inputs,
+                timeout_ms=timeout_ms,
+            )
+            return True
+        except CheckpointFailed:
+            return False
+
     try:
-        await surface.start()
-        policy.validate_url(TARGET_URL)
-        await install_navigation_guard(
-            context=surface.context,
+        if not managed:
+            await surface.start()
+
+            page = surface.page
+            context = surface.context
+
+            await install_navigation_guard(context, policy)
+
+            policy.validate_url(TARGET_URL)
+            await surface.navigate(TARGET_URL)
+
+        else:
+            policy.validate_url(page.url)
+
+            await install_navigation_guard(
+                context,
+                policy,
+            )
+
+        browser_session = (
+            session if managed else BrowserSession(page)
+        )
+
+        controller = SharedBrowserController(
+            session=browser_session,
             policy=policy,
         )
-        await surface.navigate(TARGET_URL)
 
         for step in artifact.steps:
             current_step = step.step_id
+            browser_session.current_step = current_step
 
-            print(f"Executing: {current_step}")
+            print(f"Executing: {current_step}", flush=True)
 
             evidence.record(
                 event_type="step_started",
                 step=current_step,
-                details={
-                    "action": step.action,
-                },
+                details={"action": step.action},
             )
 
-            # Inspect the current UI state.
-            observation = await surface.observe()
+            intervention_attempted = False
+            operator_action_required = False
 
-            # Detect expected business outcomes before
-            # attempting the next action.
-            outcome = detect_business_outcome(
-                page_text=observation["visible_text"],
-                artifact=artifact,
-            )
+            # Demo mode: pause BEFORE clicking Search.
+            if (
+                demo_intervention
+                and current_step == "submit_search"
+            ):
+                intervention_attempted = True
+                operator_action_required = True
 
-            if outcome is not None:
-                return complete_business_outcome(outcome)
+                print(
+                    "[DEMO] Waiting for operator at submit_search",
+                    flush=True,
+                )
 
-            # Execute interactive actions.
-            if step.action in ("fill", "click"):
-
-                if step.target is None:
-                    raise ValueError(
-                        f"Missing locator: {current_step}"
+                try:
+                    await request_human_intervention(
+                        "demo_manual_search_required"
+                    )
+                except asyncio.TimeoutError:
+                    return await finish_failure(
+                        "intervention_timeout"
                     )
 
-                locator = resolve_locator(
-                    surface.page,
-                    step.target,
-                )
+            while True:
+                try:
+                    browser_session.assert_automation_control()
+                    policy.validate_url(page.url)
 
-                # Wait for exactly one visible control.
-                # Detect business outcomes during the wait.
-                await wait_for_control(
-                    page=surface.page,
-                    locator=locator,
-                    artifact=artifact,
-                    timeout=5.0,
-                )
+                    # If human already completed Search,
+                    # verify checkpoint and skip duplicate click.
+                    if (
+                        intervention_attempted
+                        and current_step == "submit_search"
+                        and step.checkpoint is not None
+                    ):
+                        if await checkpoint_passed(step):
+                            evidence.record(
+                                event_type="step_completed_by_operator",
+                                step=current_step,
+                                details={
+                                    "checkpoint": "passed",
+                                },
+                            )
+                            break
 
-                await guard.validate(
-                    page=surface.page,
-                    locator=locator,
-                    action=step.action,
-                )
+                        if operator_action_required:
+                            return await finish_failure(
+                                "operator_action_incomplete"
+                            )
 
-                if step.action == "fill":
+                    page_text = await page.locator(
+                        "body"
+                    ).inner_text()
 
-                    if step.value is None:
-                        raise ValueError(
-                            f"Missing fill value: {current_step}"
+                    outcome = detect_business_outcome(
+                        page_text=page_text,
+                        artifact=artifact,
+                    )
+
+                    if outcome is not None:
+                        return await finish_business_outcome(
+                            outcome
                         )
 
-                    value = resolve_value(
-                        template=step.value,
-                        inputs=inputs,
+                    if step.action in ("fill", "click"):
+                        if step.target is None:
+                            raise ValueError(
+                                "Missing step locator"
+                            )
+
+                        locator = resolve_locator(
+                            page,
+                            step.target,
+                        )
+
+                        await wait_for_control(
+                            page=page,
+                            locator=locator,
+                            artifact=artifact,
+                            timeout=5.0,
+                        )
+
+                        value = None
+
+                        if step.action == "fill":
+                            if step.value is None:
+                                raise ValueError(
+                                    "Missing fill value"
+                                )
+
+                            value = resolve_value(
+                                step.value,
+                                inputs,
+                            )
+
+                        await controller.automation_action(
+                            action=step.action,
+                            target=step.target,
+                            value=value,
+                        )
+
+                        if step.checkpoint is not None:
+                            await verify_checkpoint(
+                                page=page,
+                                checkpoint=step.checkpoint,
+                                inputs=inputs,
+                                timeout_ms=5000,
+                            )
+
+                        evidence.record(
+                            event_type="step_completed",
+                            step=current_step,
+                            details={
+                                "action": step.action,
+                                "checkpoint": (
+                                    "passed"
+                                    if step.checkpoint is not None
+                                    else "not_configured"
+                                ),
+                            },
+                        )
+
+                        break
+
+                    elif step.action == "extract":
+                        if step.extraction is None:
+                            raise ValueError(
+                                "Missing extraction specification"
+                            )
+
+                        page_text = await page.locator(
+                            "body"
+                        ).inner_text()
+
+                        match = re.search(
+                            step.extraction.pattern,
+                            page_text,
+                        )
+
+                        if match is None:
+                            raise RuntimeError(
+                                "Savings balance extraction failed"
+                            )
+
+                        extracted_balance = (
+                            match.group(
+                                step.extraction.group
+                            ).replace(",", "")
+                        )
+
+                        outputs = verify_savings_balance(
+                            page_text=page_text,
+                            member_id=member_id,
+                        )
+
+                        if outputs is None:
+                            raise RuntimeError(
+                                "Member or balance verification failed"
+                            )
+
+                        if (
+                            outputs["savings_balance"]
+                            != extracted_balance
+                        ):
+                            raise RuntimeError(
+                                "Balance verification mismatch"
+                            )
+
+                        evidence.record(
+                            event_type="step_completed",
+                            step=current_step,
+                            details={
+                                "action": "extract",
+                                "checkpoint": "passed",
+                            },
+                        )
+
+                        result = {
+                            "status": "success",
+                            "capability_id": artifact.capability_id,
+                            "outputs": outputs,
+                        }
+
+                        evidence.record(
+                            event_type="replay_completed",
+                            step=current_step,
+                            details={"status": "success"},
+                        )
+
+                        evidence.save(result)
+
+                        if managed:
+                            await session.complete()
+
+                        return result
+
+                    else:
+                        raise ValueError(
+                            f"Unsupported action: {step.action}"
+                        )
+
+                except BusinessOutcomeDetected as exc:
+                    return await finish_business_outcome(
+                        exc.outcome
                     )
 
-                    await locator.fill(
-                        value,
-                        timeout=5000,
+                except PolicyViolation:
+                    return await finish_failure(
+                        "policy_violation"
                     )
 
-                elif step.action == "click":
+                except (
+                    LocatorTimeoutError,
+                    CheckpointFailed,
+                    PlaywrightTimeoutError,
+                ) as exc:
+                    if isinstance(exc, LocatorTimeoutError):
+                        error_type = "locator_timeout"
+                    elif isinstance(exc, CheckpointFailed):
+                        error_type = "checkpoint_failed"
+                    else:
+                        error_type = "playwright_timeout"
 
-                    await locator.click(
-                        timeout=5000,
-                    )
+                    if not managed or intervention_attempted:
+                        return await finish_failure(
+                            error_type,
+                            recoverable=True,
+                        )
 
-                # Verify the checkpoint after execution.
-                if step.checkpoint is not None:
-                    await verify_checkpoint(
-                        page=surface.page,
-                        checkpoint=step.checkpoint,
-                        inputs=inputs,
-                        timeout_ms=5000,
-                    )
+                    intervention_attempted = True
 
-                evidence.record(
-                    event_type="step_completed",
-                    step=current_step,
-                    details={
-                        "action": step.action,
-                        "checkpoint": (
-                            "passed"
-                            if step.checkpoint is not None
-                            else "not_configured"
-                        ),
-                    },
-                )
+                    try:
+                        await request_human_intervention(
+                            "recoverable_ui_failure"
+                        )
+                    except asyncio.TimeoutError:
+                        return await finish_failure(
+                            "intervention_timeout"
+                        )
 
-            # Extract and verify requested information.
-            elif step.action == "extract":
+                    # Retry once after intervention.
+                    continue
 
-                if step.extraction is None:
-                    raise ValueError(
-                        "Missing extraction specification"
-                    )
-
-                page_text = await surface.page.locator(
-                    "body"
-                ).inner_text()
-
-                outcome = detect_business_outcome(
-                    page_text=page_text,
-                    artifact=artifact,
-                )
-
-                if outcome is not None:
-                    return complete_business_outcome(outcome)
-
-                # Apply the extraction rule from the artifact.
-                match = re.search(
-                    step.extraction.pattern,
-                    page_text,
-                )
-
-                if match is None:
-                    raise RuntimeError(
-                        "Savings balance extraction failed"
-                    )
-
-                extracted_balance = (
-                    match.group(step.extraction.group)
-                    .replace(",", "")
-                )
-
-                # Verify the balance belongs to the
-                # requested member.
-                outputs = verify_savings_balance(
-                    page_text=page_text,
-                    member_id=member_id,
-                )
-
-                if outputs is None:
-                    raise RuntimeError(
-                        "Member ID or balance verification failed"
-                    )
-
-                if (
-                    outputs["savings_balance"]
-                    != extracted_balance
-                ):
-                    raise RuntimeError(
-                        "Extracted balance verification mismatch"
-                    )
-
-                evidence.record(
-                    event_type="step_completed",
-                    step=current_step,
-                    details={
-                        "action": "extract",
-                        "checkpoint": "passed",
-                    },
-                )
-
-                result = {
-                    "status": "success",
-                    "capability_id": artifact.capability_id,
-                    "outputs": outputs,
-                }
-
-                evidence.record(
-                    event_type="replay_completed",
-                    step=current_step,
-                    details={
-                        "status": "success",
-                    },
-                )
-
-                evidence.save(result)
-
-                return result
-
-            else:
-                raise ValueError(
-                    f"Unsupported action: {step.action}"
-                )
-
-        raise RuntimeError(
-            "Replay ended without satisfying "
-            "the success condition"
+        return await finish_failure(
+            "success_condition_not_met"
         )
 
     except PolicyViolation:
-        return await complete_failure(
-            error_type="policy_violation",
-            recoverable=False,
+        return await finish_failure(
+            "policy_violation"
         )
 
-    except BusinessOutcomeDetected as exc:
-        return complete_business_outcome(exc.outcome)
-
-    except LocatorTimeoutError:
-        return await complete_failure(
-            error_type="locator_timeout",
-            recoverable=True,
+    except SessionOwnershipError:
+        return await finish_failure(
+            "session_ownership_error"
         )
 
     except Exception as exc:
-        blocked_requests = getattr(
-            surface.context,
-            "_blocked_requests",
-            [],
-        ) if getattr(surface, "context", None) else []
-
-        if blocked_requests:
-            return await complete_failure(
-                error_type="policy_violation",
-                recoverable=False,
-            )
-
-        return await complete_failure(
-            error_type=type(exc).__name__,
-            recoverable=False,
+        return await finish_failure(
+            type(exc).__name__
         )
 
     finally:
-        await surface.close()
+        if surface is not None:
+            await surface.close()
 
 
 if __name__ == "__main__":
@@ -424,9 +567,7 @@ if __name__ == "__main__":
         else "12345"
     )
 
-    result = asyncio.run(
-        run_replay(member_id)
-    )
+    result = asyncio.run(run_replay(member_id))
 
     print("\nREPLAY RESULT:")
     print(json.dumps(result, indent=2))

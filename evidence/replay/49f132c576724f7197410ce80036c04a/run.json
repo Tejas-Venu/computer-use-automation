@@ -1,0 +1,116 @@
+{
+  "run_id": "49f132c576724f7197410ce80036c04a",
+  "events": [
+    {
+      "timestamp": "2026-11-02T07:18:15.759272+00:00",
+      "event": "replay_started",
+      "step": null,
+      "details": {
+        "capability_id": "banking.get_savings_balance",
+        "capability_version": "1.0.0",
+        "managed": true,
+        "demo_intervention": false
+      }
+    },
+    {
+      "timestamp": "2026-11-02T07:18:15.761091+00:00",
+      "event": "step_started",
+      "step": "enter_member_id",
+      "details": {
+        "action": "fill"
+      }
+    },
+    {
+      "timestamp": "2026-11-02T07:18:15.808168+00:00",
+      "event": "step_completed",
+      "step": "enter_member_id",
+      "details": {
+        "action": "fill",
+        "checkpoint": "passed"
+      }
+    },
+    {
+      "timestamp": "2026-11-02T07:18:15.808189+00:00",
+      "event": "step_started",
+      "step": "submit_search",
+      "details": {
+        "action": "click"
+      }
+    },
+    {
+      "timestamp": "2026-11-02T07:18:20.870929+00:00",
+      "event": "intervention_requested",
+      "step": "submit_search",
+      "details": {
+        "intervention_id": "4bb53554cb014be9a51d4d8b242494db",
+        "reason_category": "recoverable_ui_failure"
+      }
+    },
+    {
+      "timestamp": "2026-11-02T07:18:20.988932+00:00",
+      "event": "automation_resumed",
+      "step": "submit_search",
+      "details": {}
+    },
+    {
+      "timestamp": "2026-11-02T07:18:22.095616+00:00",
+      "event": "step_completed",
+      "step": "submit_search",
+      "details": {
+        "action": "click",
+        "checkpoint": "passed"
+      }
+    },
+    {
+      "timestamp": "2026-11-02T07:18:22.095647+00:00",
+      "event": "step_started",
+      "step": "open_details",
+      "details": {
+        "action": "click"
+      }
+    },
+    {
+      "timestamp": "2026-11-02T07:18:22.142054+00:00",
+      "event": "step_completed",
+      "step": "open_details",
+      "details": {
+        "action": "click",
+        "checkpoint": "passed"
+      }
+    },
+    {
+      "timestamp": "2026-11-02T07:18:22.142083+00:00",
+      "event": "step_started",
+      "step": "extract_balance",
+      "details": {
+        "action": "extract"
+      }
+    },
+    {
+      "timestamp": "2026-11-02T07:18:22.144858+00:00",
+      "event": "step_completed",
+      "step": "extract_balance",
+      "details": {
+        "action": "extract",
+        "checkpoint": "passed"
+      }
+    },
+    {
+      "timestamp": "2026-11-02T07:18:22.144869+00:00",
+      "event": "replay_completed",
+      "step": "extract_balance",
+      "details": {
+        "status": "success"
+      }
+    }
+  ],
+  "result": {
+    "status": "success",
+    "capability_id": "banking.get_savings_balance",
+    "outputs": {
+      "member_id": "[REDACTED]",
+      "savings_balance": "[REDACTED]",
+      "currency": "USD"
+    }
+  }
+}
