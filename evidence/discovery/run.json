@@ -1,6 +1,8 @@
 {
   "status": "success",
   "goal": "Find member 12345, open their details, and read their savings balance.",
+  "target_app": "mock-bank",
+  "target_url": "http://mock-bank:8000",
   "steps": [
     {
       "step": 1,
