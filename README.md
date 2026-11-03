@@ -1,141 +1,347 @@
 
 # Computer-Use Automation System
 
-A human-in-the-loop computer-use automation system that discovers workflows using an LLM, converts successful discoveries into versioned capability artifacts, and replays them deterministically without requiring further LLM inference.
+A human-in-the-loop computer-use automation system that uses an LLM to discover workflows through a live user interface, records successful executions as reusable capability artifacts, and replays those capabilities deterministically without an LLM in the execution loop.
 
-The project demonstrates browser automation against a fictional banking administration portal.
+Built for the **interface.ai Software Engineer Take-Home Assignment**.
+
+The implementation demonstrates an end-to-end workflow against a fictional banking administration portal with no integration API used by the automation.
 
 ## Features
 
-- LLM-driven workflow discovery using Ollama and Qwen
-- Versioned, parameterized capability artifacts
-- Deterministic browser replay using Playwright
-- Stable element locators and execution checkpoints
-- Structured extraction and business-outcome verification
-- Safety policies and navigation restrictions
-- Human intervention with browser-session preservation
-- FastAPI operator API and web dashboard
-- Execution evidence and failure screenshots
-- Automated tests covering replay, safety, and handoff
+- **LLM-driven discovery:** Ollama-hosted Qwen vision-language model performs an observe → decide → act loop.
+- **Reusable capabilities:** Successful discoveries are converted into typed, versioned, parameterized JSON artifacts.
+- **Deterministic replay:** Playwright executes saved capabilities without additional LLM decisions.
+- **Stable locators:** Attribute-based and accessibility-role targeting, with checkpoint verification.
+- **Structured outcomes:** Distinguishes successful execution, expected business outcomes, and technical failures.
+- **Safety guardrails:** Restricts navigation and actions using explicit policies.
+- **Human-in-the-loop intervention:** Transfers control of the same live browser session between automation and an operator.
+- **Operator dashboard:** FastAPI backend with a browser screenshot preview, session status, intervention controls, and execution activity.
+- **Execution evidence:** Structured discovery and replay logs, with screenshots for debugging.
+- **Automated tests:** Tests covering artifact validation, replay, safety, browser ownership, and human handoff.
 
 ## Architecture
 
+The system separates discovery from execution.
+
 ```text
-Operator Dashboard
-       |
-       v
-FastAPI Operator Service
-       |
-       v
-BrowserSession + InterventionManager
-       |
-       v
-SharedBrowserController
-       |
-       v
-Playwright Browser
-       |
-       v
-Mock Banking Application
+                      Natural-Language Goal
+                                |
+                                v
+                      LLM Discovery Agent
+                         (Ollama / Qwen)
+                                |
+                                v
+                       Browser Surface
+                          (Playwright)
+                                |
+                                v
+                    Successful Discovery
+                         + Evidence
+                                |
+                                v
+                       Artifact Generator
+                                |
+                                v
+                     Versioned JSON Capability
+                                |
+                                v
+                     Deterministic Replay Engine
+                                |
+                                v
+                    Verified Execution Result
+                                |
+                  +-------------+-------------+
+                  |             |             |
+                  v             v             v
+               Success      Business       Technical
+                            Outcome        Failure
+                                              |
+                                              v
+                                      Human Intervention
+                                      (when recoverable)
 ```
 
-The system has two primary execution modes.
+The main components are:
 
-### Discovery
+| Component | Responsibility |
+|-----------|----------------|
+| `app/surface/` | Browser observation and interaction |
+| `app/discovery/` | LLM-guided workflow discovery |
+| `app/artifacts/` | Capability schema and generation |
+| `app/replay/` | Deterministic execution and verification |
+| `app/safety/` | Action and navigation restrictions |
+| `app/handoff/` | Human intervention and browser ownership |
+| `mock_bank/` | Fictional banking administration application |
 
-The discovery agent uses an LLM to inspect the browser, choose actions, and record successful interactions.
+### Design Principle
 
-A successful discovery provides the evidence used to generate a reusable capability artifact.
+**The LLM discovers. The artifact records. Deterministic replay executes.**
 
-### Deterministic Replay
-
-The replay engine loads a saved capability artifact and executes its steps without calling the LLM.
-
-It uses stable locators, checkpoints, extraction rules, and output verification.
+The model is used to discover the workflow, not to make decisions during subsequent replay executions.
 
 ## Project Structure
 
 ```text
-app/
-  artifacts/      Capability schema and generation
-  discovery/      LLM discovery and completion verification
-  handoff/        Browser ownership, intervention, API, dashboard
-  replay/         Deterministic execution and evidence
-  safety/         Action and navigation restrictions
-  surface/        Playwright browser abstraction
-
-mock_bank/        Fictional banking application
-artifacts/        Versioned capability JSON
-evidence/         Discovery and replay evidence
-tests/            Automated tests
+computer-use-automation/
+├── app/
+│   ├── artifacts/
+│   │   ├── generator.py
+│   │   └── schema.py
+│   ├── discovery/
+│   │   ├── agent.py
+│   │   ├── completion.py
+│   │   ├── runner.py
+│   │   └── schemas.py
+│   ├── handoff/
+│   │   ├── api.py
+│   │   ├── controller.py
+│   │   ├── intervention.py
+│   │   ├── service.py
+│   │   ├── session.py
+│   │   └── static/
+│   │       ├── app.js
+│   │       ├── index.html
+│   │       └── styles.css
+│   ├── replay/
+│   │   ├── checkpoints.py
+│   │   ├── engine.py
+│   │   ├── evidence.py
+│   │   ├── locators.py
+│   │   ├── outcomes.py
+│   │   └── waits.py
+│   ├── safety/
+│   │   ├── guard.py
+│   │   ├── navigation.py
+│   │   └── policy.py
+│   ├── surface/
+│   │   └── browser.py
+│   └── main.py
+├── mock_bank/
+│   └── main.py
+├── artifacts/
+│   └── banking.get_savings_balance.v1.json
+├── evidence/
+│   ├── discovery/
+│   └── replay/
+├── tests/
+├── Dockerfile
+├── compose.yaml
+├── .env.example
+├── README.md
+└── REPORT.md
 ```
 
 ## Requirements
 
+- Docker Desktop with Docker Compose
 - Python 3.12-compatible environment
-- Docker Desktop and Docker Compose
-- Playwright
-- FastAPI
-- Ollama with the configured Qwen model for discovery
+- Ollama for LLM-driven discovery
+- Qwen model: `qwen3-vl:4b`
 
-Ollama is optional when running saved capabilities.
+Python, Playwright, FastAPI, and other application dependencies are installed through the project's Docker image.
 
-## Setup
+**Ollama is required for discovery but not for deterministic replay.**
 
-### 1. Configure environment variables
+## Quick Start
 
-Create a `.env` file in the project root.
+### 1. Clone the repository
 
-```env
-OPERATOR_TOKEN=replace-with-a-random-secret
+```bash
+git clone https://github.com/Tejas-Venu/computer-use-automation.git
+cd computer-use-automation
 ```
 
-Generate a token locally:
+### 2. Configure environment variables
+
+Create a `.env` file:
+
+```bash
+cp .env.example .env
+```
+
+Replace the placeholder operator token with a randomly generated secret.
+
+Generate a token:
 
 ```bash
 python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-Never commit `.env` to version control.
+Your `.env` should contain:
 
-### 2. Start the services
+```env
+OPERATOR_TOKEN=your-generated-random-token
+```
+
+Do not commit `.env` or real credentials to Git.
+
+The operator token authenticates requests to the local operator API.
+
+### 3. Start the application
 
 ```bash
 docker compose up -d --build mock-bank operator
 ```
 
-### 3. Open the operator dashboard
+This starts:
 
-Visit:
+| Service | Address | Purpose |
+|---------|---------|---------|
+| Mock Bank | http://localhost:8000 | Fictional banking administration UI |
+| Operator Dashboard | http://localhost:8080 | Automation monitoring and human intervention |
+
+Both services are intended for local development.
+
+### 4. Verify the services
+
+```bash
+docker compose ps
+```
+
+Open the operator dashboard:
 
 http://localhost:8080
 
-Enter the operator token configured in `.env`.
+Enter the operator token from `.env`.
 
-## Running Deterministic Replay
+## End-to-End Demo
 
-Retrieve member 12345:
+This section demonstrates the complete required workflow:
+
+**Natural-language goal → LLM discovery → saved artifact → deterministic replay → verified outputs.**
+
+### Step 1 — Start Ollama
+
+Install Ollama from:
+
+https://ollama.com
+
+Download the configured model:
+
+```bash
+ollama pull qwen3-vl:4b
+```
+
+Ensure the Ollama server is running.
+
+On systems where Ollama is not already running:
+
+```bash
+ollama serve
+```
+
+The Docker automation service connects to Ollama using:
+
+```text
+http://host.docker.internal:11434
+```
+
+The configured model is:
+
+```text
+qwen3-vl:4b
+```
+
+### Step 2 — Run LLM-driven discovery
+
+The discovery agent accepts a natural-language goal, a member identifier, a target URL, and a maximum step count.
+
+Run:
+
+```bash
+docker compose run --rm automation \
+  python -m app.discovery.runner \
+  --member-id 12345 \
+  --goal "Find member 12345, open their details, and read their savings balance." \
+  --target-url http://mock-bank:8000 \
+  --max-steps 10
+```
+
+The discovery agent uses the LLM to choose actions against the live browser interface.
+
+The successful demonstrated sequence is:
+
+| Step | Action | Description |
+|------|--------|-------------|
+| 1 | Fill | Enter member ID `12345` |
+| 2 | Click | Submit the Search form |
+| 3 | Click | Open member details |
+| 4 | Extract | Read and verify the savings balance |
+
+The model's selected actions, reasoning, and locator specifications are recorded.
+
+A successful discovery returns:
+
+```json
+{
+  "status": "success",
+  "outputs": {
+    "member_id": "12345",
+    "savings_balance": "2450.75",
+    "currency": "USD"
+  }
+}
+```
+
+Discovery evidence is saved to:
+
+```text
+evidence/discovery/run.json
+evidence/discovery/final.png
+```
+
+The current implementation is specialized for the mock banking savings-balance workflow. Although the goal and target URL are configurable inputs, the safety policy restricts execution to the approved mock banking application, and the completion verifier expects a savings-balance result.
+
+### Step 3 — Generate the reusable capability
+
+After successful discovery, run:
+
+```bash
+docker compose run --rm automation \
+  python -m app.artifacts.generator
+```
+
+This generates:
+
+```text
+artifacts/banking.get_savings_balance.v1.json
+```
+
+The artifact is typed, versioned, and parameterized.
+
+It includes:
+
+- Capability ID and version
+- Description and target application
+- Typed input parameters
+- Typed output specifications
+- Ordered actions
+- Stable locator definitions
+- Runtime parameter references
+- Checkpoints
+- Extraction rules
+- Success conditions
+- Expected business outcomes
+
+The recorded member ID is replaced with the runtime parameter:
+
+```text
+{{member_id}}
+```
+
+This allows the same capability to execute for different members without repeating discovery.
+
+### Step 4 — Run deterministic replay
+
+Replay the saved capability:
 
 ```bash
 docker compose run --rm automation \
   python -m app.replay.engine 12345
 ```
 
-Retrieve member 67890:
-
-```bash
-docker compose run --rm automation \
-  python -m app.replay.engine 67890
-```
-
-Test an unknown member:
-
-```bash
-docker compose run --rm automation \
-  python -m app.replay.engine 99999
-```
-
-Successful output includes:
+Expected result:
 
 ```json
 {
@@ -149,80 +355,312 @@ Successful output includes:
 }
 ```
 
-An unknown member returns a structured `member_not_found` business outcome.
+**No LLM inference is performed during deterministic replay.**
 
-## LLM Discovery
+The replay engine loads the artifact, resolves its locators, executes approved actions, verifies checkpoints, and extracts the requested outputs.
 
-Discovery uses the Ollama server and configured Qwen model.
+### Step 5 — Demonstrate parameterization
 
-Start Ollama and ensure the model is available.
-
-Then run:
+Run the same saved artifact with a different member:
 
 ```bash
 docker compose run --rm automation \
-  python -m app.discovery.runner
+  python -m app.replay.engine 67890
 ```
 
-The discovery process records browser actions, stable locator information, and extracted outputs.
+Expected result:
 
-## Capability Generation
+```json
+{
+  "status": "success",
+  "capability_id": "banking.get_savings_balance",
+  "outputs": {
+    "member_id": "67890",
+    "savings_balance": "8150.20",
+    "currency": "USD"
+  }
+}
+```
 
-Generate a reusable capability artifact from recorded discovery:
+No new discovery run or capability generation is required.
+
+### Step 6 — Demonstrate an expected business outcome
+
+Run:
 
 ```bash
 docker compose run --rm automation \
-  python -m app.artifacts.generator
+  python -m app.replay.engine 99999
 ```
 
-The generated artifact is stored at:
+Expected result:
+
+```json
+{
+  "status": "business_outcome",
+  "capability_id": "banking.get_savings_balance",
+  "outcome": "member_not_found",
+  "outputs": {}
+}
+```
+
+A missing member is treated as a legitimate business outcome rather than a technical failure.
+
+## Capability Artifact
+
+The reusable capability is stored at:
 
 ```text
 artifacts/banking.get_savings_balance.v1.json
 ```
 
-The artifact includes:
+### Input Contract
 
-- Capability ID and version
-- Input and output specifications
-- Ordered actions
-- Stable locators
-- Checkpoints
-- Extraction rules
-- Success conditions
-- Expected business outcomes
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `member_id` | String | Yes | Member identifier |
+
+### Output Contract
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `member_id` | String | Verified member identifier |
+| `savings_balance` | String | Savings balance |
+| `currency` | String | Currency code |
+
+### Recorded Actions
+
+```text
+enter_member_id
+       |
+       v
+submit_search
+       |
+       v
+open_details
+       |
+       v
+extract_balance
+```
+
+The capability uses stable locator specifications rather than replaying positional control IDs recorded during discovery.
+
+Checkpoints verify that the expected UI state was reached before proceeding.
+
+## Deterministic Replay and Error Handling
+
+The replay engine implements a structured execution process.
+
+For each step:
+
+1. Validate the current application state.
+2. Check for known business outcomes.
+3. Resolve the saved locator.
+4. Wait for the required control.
+5. Verify locator uniqueness.
+6. Execute the approved action.
+7. Verify the configured checkpoint.
+8. Record execution evidence.
+
+The system distinguishes three result categories.
+
+### Success
+
+The requested capability completes and returns verified outputs.
+
+### Expected Business Outcome
+
+A known application outcome, such as `member_not_found`, is returned without treating it as an automation crash.
+
+### Technical Failure
+
+A technical failure identifies the interrupted step and error category.
+
+Examples include:
+
+- Locator timeout
+- Checkpoint failure
+- Policy violation
+- Extraction verification failure
+- Session ownership failure
+- Intervention timeout
+
+The system uses bounded waiting and explicit escalation rather than unrestricted autonomous retries.
 
 ## Human-in-the-Loop Demonstration
 
-1. Open the operator dashboard.
-2. Enter the operator token and member ID.
-3. Enable **Require human intervention (demo)**.
-4. Start automation.
-5. Wait for the `submit_search` intervention.
-6. Click **Take Control**.
-7. Execute the approved Search action using the manual controls.
-8. Click **Resume Automation**.
-9. Verify that replay continues and returns the savings balance.
+The system supports operator intervention using the same live Playwright browser session.
 
-The automation and operator use the same Playwright page.
+### Start the operator dashboard
 
-The replay engine checks the post-intervention state before continuing.
+```bash
+docker compose up -d --build mock-bank operator
+```
 
-## Safety
+Open:
 
-The demonstration is restricted to the fictional mock banking application.
+http://localhost:8080
 
-Safety controls include:
+Enter the operator token configured in `.env`.
 
-- Approved application routes
-- Restricted browser actions
-- Navigation guards
-- Unique locator requirements
-- Session ownership checks
-- Structured failure reporting
-- Sensitive-data redaction in recorded evidence
+### Demonstration Procedure
 
-This project is a controlled prototype, not a production banking integration.
+1. Enter Member ID `12345`.
+2. Enable **Require human intervention (demo)**.
+3. Click **Start Automation**.
+4. Wait until the session pauses at `submit_search`.
+5. Click **Take Control**.
+6. Verify that the session state changes to `human_control`.
+7. Configure the manual browser controls as follows:
+
+| Setting | Value |
+|---------|-------|
+| Action | `Click` |
+| Locator Strategy | `Role` |
+| Role | `button` |
+| Accessible Name | `Search` |
+
+8. Click **Execute Manual Action**.
+9. Verify that the browser navigates to `/search`.
+10. Click **Resume Automation**.
+11. Wait for the remaining replay steps to complete.
+12. Verify that the savings balance is returned successfully.
+
+### Session State Machine
+
+```text
+RUNNING
+   |
+   v
+PAUSED
+   |
+   v
+HUMAN_CONTROL
+   |
+   v
+RESUMING
+   |
+   v
+RUNNING
+   |
+   v
+COMPLETED
+
+Any nonterminal state
+   |
+   +----> FAILED
+```
+
+The `BrowserSession` tracks the current owner and prevents automation from acting while the human operator owns the session.
+
+After the operator releases control, replay verifies the current UI state.
+
+If the operator already completed Search, replay recognizes the satisfied checkpoint and avoids repeating the action.
+
+The dashboard provides a screenshot-based browser preview, session status, intervention controls, and approved manual actions.
+
+It does not provide unrestricted remote-desktop control.
+
+## Safety and Policy Guardrails
+
+The system uses explicit restrictions to limit automation behavior.
+
+### Navigation Restrictions
+
+Automation is restricted to the approved mock banking application and permitted routes.
+
+External navigation and unapproved routes are blocked.
+
+### Action Restrictions
+
+The safety layer permits approved read-oriented operations and blocks risky or irreversible actions.
+
+Examples of blocked actions include transfers and deletion.
+
+### Session Ownership
+
+Only the active session owner may execute browser actions.
+
+Automation cannot act while a human operator controls the browser.
+
+Unauthorized operators cannot release another operator's session.
+
+### Sensitive Data Handling
+
+The implementation includes:
+
+- Environment-based operator token configuration
+- API token authentication
+- Sensitive-string redaction in evidence
+- Structured error reporting
+- Restricted browser navigation
+- Unique locator validation
+
+The mock banking application contains fictional member data.
+
+**This project is a controlled prototype, not a production banking integration.**
+
+Production deployment would require stronger authentication, authorization, audit logging, secret management, and regulated-data handling.
+
+## Evidence and Observability
+
+Execution evidence is stored under:
+
+```text
+evidence/
+├── discovery/
+│   ├── run.json
+│   └── final.png
+└── replay/
+    └── <run-id>/
+        └── run.json
+```
+
+Failure runs may also include screenshots.
+
+### LLM Discovery Evidence
+
+The discovery record includes:
+
+- Natural-language goal
+- Ordered model-selected actions
+- Action reasoning
+- Recorded locator specifications
+- Application URLs
+- Verified outputs
+
+### Deterministic Replay Evidence
+
+Replay records execution events, including:
+
+- Replay started
+- Step started
+- Step completed
+- Business outcome detected
+- Intervention requested
+- Automation resumed
+- Replay completed or failed
+
+### Verified Operator-Assisted Replay
+
+A successful operator-assisted replay was recorded under:
+
+```text
+evidence/replay/3f58aed51c5f4518814772ba2c02b926/run.json
+```
+
+The recorded events include:
+
+```text
+intervention_requested
+automation_resumed
+step_completed_by_operator
+replay_completed
+```
+
+The final replay status was `success`.
+
+The evidence confirms operator-completed checkpoint recognition. A separate, comprehensive manual-action API audit trail is not independently established by this record.
 
 ## Testing
 
@@ -233,55 +671,109 @@ docker compose run --rm automation \
   python -m pytest tests/ -v
 ```
 
-Latest verified result:
+Latest verified regression result:
 
 ```text
 52 passed, 1 warning
 ```
 
-The warning is a Starlette/httpx test-client deprecation warning.
+The warning relates to a Starlette/httpx test-client deprecation.
 
-## Evidence
+### Test Coverage
 
-Replay evidence is stored under:
+The test suite covers:
 
-```text
-evidence/replay/
-```
+- Capability schema validation
+- Extraction and completion verification
+- Locator resolution
+- UI checkpoints
+- Business outcomes
+- Replay failure evidence
+- Sensitive-data redaction
+- Safety policy enforcement
+- Navigation restrictions
+- Browser session ownership
+- Intervention lifecycle
+- Live browser handoff
+- Managed replay
+- Operator API authentication
 
-A verified successful operator-assisted run recorded:
+The automated tests validate the demonstrated mock banking workflow and its supported failure scenarios.
 
-- `intervention_requested`
-- `automation_resumed`
-- `step_completed_by_operator`
-- `replay_completed`
+They do not establish general reliability across arbitrary websites or native desktop applications.
 
-Run ID:
+## Design for Heterogeneity and Multi-Tenant Reuse
 
-```text
-3f58aed51c5f4518814772ba2c02b926
-```
+The current implementation uses a Playwright browser surface.
 
-The operator-completed checkpoint is recorded, although a separate manual-action API audit record has not been independently verified.
+The architecture separates the capability artifact from the application-specific observation and interaction mechanism.
 
-## Limitations
+### Heterogeneous Surfaces
 
-- The demonstration targets a fictional banking application.
-- The operator dashboard uses screenshots rather than full remote desktop streaming.
-- Browser session state is maintained in memory.
-- The prototype is designed for a single persistent operator service.
-- Manual intervention requires an available operator.
-- Recovery behavior is limited to supported workflow steps.
-- Additional authorization, auditing, and resilience would be required for production deployment.
+Future surface adapters could support:
+
+| Surface | Observation | Interaction |
+|---------|-------------|-------------|
+| Modern web | DOM and accessibility tree | Playwright |
+| Legacy web | Frames, accessibility information, screenshots | Frame-aware and visual controls |
+| Native desktop | OS accessibility APIs and screenshots | OS-level input automation |
+
+Only the Playwright browser implementation is included in this prototype.
+
+### Multi-Tenant Reuse
+
+In a production environment, multiple institutions may operate different configurations of the same vendor application.
+
+A future capability registry could support:
+
+- Shared vendor-level capability definitions
+- Application-version metadata
+- Tenant-specific route and locator overrides
+- Compatibility checks
+- Version-drift detection
+- Approval states for unattended execution
+
+These extensions are described in the technical report but are not implemented.
+
+## Limitations and Trade-offs
+
+The prototype intentionally focuses on a complete, tested vertical slice rather than a broad automation platform.
+
+Current limitations include:
+
+- One fictional banking application.
+- A savings-balance lookup capability rather than arbitrary workflow support.
+- Playwright-based browser automation only.
+- No native desktop automation.
+- No multi-tenant capability registry.
+- In-memory browser session and intervention state.
+- A single persistent operator service.
+- Screenshot-based browser preview rather than full remote co-browsing.
+- Workflow-specific recovery and checkpoint reconciliation.
+- No production-grade operator identity management or comprehensive audit infrastructure.
+
+These cuts prioritize deterministic execution, structured artifacts, safety, and human handoff.
 
 ## Stopping Services
+
+Stop the project containers:
 
 ```bash
 docker compose down
 ```
 
-For discovery environments, Ollama can be stopped separately.
+Stop the Qwen model if it is running:
+
+```bash
+ollama stop qwen3-vl:4b
+```
+
+Ollama can be stopped separately when discovery is no longer needed.
 
 ## Technical Report
 
-See [REPORT.md](REPORT.md) for implementation details, evaluation results, design decisions, and limitations.
+See [REPORT.md](REPORT.md) for the design decisions, artifact schema, deterministic replay strategy, heterogeneity and multi-tenant design, human escalation, safety model, and deliberate scope cuts.
+
+## Repository
+
+https://github.com/Tejas-Venu/computer-use-automation
